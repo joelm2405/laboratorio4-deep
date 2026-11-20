@@ -1,91 +1,72 @@
-# Laboratorio 4: Reinforcement Learning (BipedalWalker)
+# Laboratorio 4 - BipedalWalker con PPO
 
-Solución desarrollada para el Laboratorio 4 de Deep Learning (UTEC 2026-2).
-Este proyecto implementa y entrena un agente bípedo de control continuo utilizando **Proximal Policy Optimization (PPO)** con **Curriculum Learning** sobre pistas procedurales del entorno Box2D `WalkerEnv`.
+Deep Learning, UTEC 2026-2.
 
----
+Entrenamos el bípedo de `walker_lab` con PPO (stable-baselines3) y un currículo de pistas cada vez más difíciles. Para la entrega solo se usa el actor, exportado a una red de PyTorch sin depender de SB3.
 
-## 1. Arquitectura del Agente
+## Modelo
 
-* **Espacio de Acciones (4D continuo en $[-1, 1]$):**
-  * Motores de cadera 1, rodilla 1, cadera 2 y rodilla 2.
-* **Espacio de Observaciones (24D continuo):**
-  * Ángulo y velocidad angular del torso.
-  * Velocidades lineales horizontal y vertical.
-  * Ángulos y velocidades de las 4 articulaciones.
-  * Sensores de contacto de las piernas con el suelo.
-  * 10 haces de lidar que detectan la elevación y obstáculos del terreno próximo.
-* **Red Neuronal (Actor):**
-  * Capa de entrada: 24 neuronas con normalización adaptativa (`RunningMeanStd`).
-  * Capas ocultas: MLP `[256, 256]` con activaciones `Tanh`.
-  * Capa de salida: 4 neuronas con acotamiento `clamp(-1.0, 1.0)`.
-  * Inferencia pura en PyTorch sin dependencias pesadas en tiempo de ejecución.
+- Entrada: las 24 observaciones del entorno, normalizadas con la media y varianza del `VecNormalize` del entrenamiento (`normalization.npz`), recortadas a [-10, 10].
+- MLP 256-256 con Tanh.
+- Salida: 4 acciones (caderas y rodillas) recortadas a [-1, 1]. En evaluación se usa la media de la política, sin muestrear.
 
----
+## Entrenamiento
 
-## 2. Estrategia de Entrenamiento (Curriculum Learning)
+`train_curriculum.py`, 8 entornos en paralelo:
 
-Para superar el reto de las pistas maratónicas con relieve variado y obstáculos:
-1. **Fase 1 (Locomoción y balance en `suave`):** 600,000 pasos. El agente aprende el balance vertical y el paso coordinado bípedo.
-2. **Fase 2 (Terreno variado en `mixto`):** 800,000 pasos. El agente aprende a utilizar las lecturas del lidar para superar pendientes y escalones.
-3. **Fase 3 (Resistencia en `maraton`):** 1,000,000 pasos. Recorridos de 240 metros con generación procedural de obstáculos.
-4. **Fase 4 (Ajuste fino en obstáculos):** Refinamiento para optimizar velocidad y tiempo de carrera.
+| Etapa | Perfil | Pasos | lr | ent_coef |
+|---|---|---:|---:|---:|
+| 1 | `suave` | 600k | 3e-4 | 0.005 |
+| 2 | `mixto` | 800k | 2e-4 | 0.002 |
+| 3 | `maraton` | 1M | 1e-4 | 0.001 |
 
-El sistema monitorizó en tiempo real las 5 pistas oficiales de maratón (`maraton_01.json` a `maraton_05.json`) y conservó el punto de control óptimo según las reglas de la competencia:
-1. Mayor número de llegadas a la meta.
-2. Menor tiempo promedio en llegadas.
-3. Mayor distancia promedio acumulada.
+Cada 32k pasos se corren las 5 maratones de `escenarios/validacion/` y se guarda el modelo si mejora según el criterio del ranking (llegadas, luego tiempo, luego distancia).
 
----
+`finetune_obstacles.py` sigue desde el mejor checkpoint con más entornos de bloques y huecos.
 
-## 3. Resultados de Evaluación
+## Resultados
 
-### Pruebas de Práctica (`escenarios/practica/`):
-* `plano.json`: **60.00 m / 21.22 s** (Llegada a la meta - 100%)
-* `suave.json`: **60.00 m / 20.90 s** (Llegada a la meta - 100%)
-* `pendientes.json`: **60.00 m / 21.70 s** (Llegada a la meta - 100%)
-* `escalones.json`: **60.00 m / 22.44 s** (Llegada a la meta - 100%)
-* `mixto.json`: **60.00 m / 21.34 s** (Llegada a la meta - 100%)
+Con `python evaluar.py` y la semilla de cada pista:
 
-### Pistas de Maratón (`escenarios/validacion/`):
-* `maraton_01.json`: **164.92 m / 52.82 s**
-* `maraton_02.json`: **173.12 m / 54.44 s**
-* `maraton_03.json`: **157.81 m / 49.94 s**
-* `maraton_04.json`: **114.94 m / 38.58 s**
-* `maraton_05.json`: **143.46 m / 46.56 s**
+| Práctica (60 m) | Distancia | Tiempo |
+|---|---:|---:|
+| plano | 60.00 | 19.62 s |
+| suave | 60.00 | 19.42 s |
+| pendientes | 60.00 | 20.26 s |
+| escalones | 60.00 | 19.04 s |
+| mixto | 60.00 | 18.96 s |
+| bloques | 22.37 (cae) | 6.84 s |
+| huecos | 13.51 (cae) | 7.46 s |
 
----
+| Maratón (240 m) | validacion | hardcore |
+|---|---:|---:|
+| 01 | 152.06 m | 161.03 m |
+| 02 | 170.78 m | 111.76 m |
+| 03 | 217.67 m | 124.84 m |
+| 04 | 116.15 m | 152.29 m |
+| 05 | 220.41 m | 150.95 m |
 
-## 4. Instrucciones de Ejecución
+Todavía no termina ninguna maratón. Probando 6 semillas por pista, la distancia media va de unos 90 a 175 m. Casi todas las caídas son en bloques y huecos.
 
-Para evaluar el modelo entrenado contenido en `agente/`:
+## Uso
 
 ```bash
 cd walker_lab
 python evaluar.py
-```
-
-Para inferencia acelerada por GPU:
-```bash
-python evaluar.py --device cuda
-```
-
-Para visualizar la carrera del robot en tiempo real:
-```bash
 python evaluar.py --render
-```
-
-Para evaluar cualquier otra pista:
-```bash
 python evaluar.py --scenario escenarios/validacion/maraton_02.json
 ```
 
----
+Para entrenar hace falta además `stable-baselines3`:
 
-## 5. Estructura de la Carpeta de Entrega (`agente/`)
+```bash
+python train_curriculum.py
+```
 
-* `agente/agent.py`: Adaptador con la clase `Agent(BaseAgent)`, implementando `__init__`, `reset` y `act(observation)`.
-* `agente/architecture.py`: Definición de la red `PolicyNetwork` en PyTorch.
-* `agente/actor_weights.pt`: Pesos entrenados del modelo.
-* `agente/normalization.npz`: Medias y varianzas del normalizador de estados.
-* `agente/requirements.txt`: Dependencias mínimas requeridas (`torch>=2.0.0`, `numpy>=1.20.0`).
+## Entrega
+
+`walker_lab/agente/` tiene `agent.py`, `architecture.py`, `actor_weights.pt`, `normalization.npz` y `requirements.txt`. El zip se arma desde `walker_lab/`:
+
+```bash
+python -c "import zipfile,pathlib; z=zipfile.ZipFile('agente.zip','w',zipfile.ZIP_DEFLATED); [z.write(p, p.as_posix()) for p in sorted(pathlib.Path('agente').glob('*')) if p.is_file()]; z.close()"
+```
